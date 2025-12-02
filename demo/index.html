@@ -12,8 +12,13 @@
         <a href='https://github.com/mattatz/Fit'>View on Github<img src='./images/github.png' /></a>
       </div>
       <div id='indicator'>
-        <span class='generation'></span>
-        <span class='status'></span>
+        <div style='display: flex; align-items: center; margin-bottom: 8px;'>
+          <span class='generation'></span>
+          <span class='status'></span>
+        </div>
+        <div class='scale-bounds'>
+          <span class='bounds-info'></span>
+        </div>
         <span class='progress'>
           <span class='progress-body'>
           </span>
@@ -170,8 +175,11 @@
       // Demo UI wrapper for scale search
       async function findOptimalScale(stickers, binWidth, binHeight, spacing, sampleRate, colors, config) {
         let statusEl = document.getElementsByClassName('status')[0]
+        let boundsEl = document.getElementsByClassName('bounds-info')[0]
+        let progressBody = document.getElementsByClassName('progress-body')[0]
+
         console.log('Searching for maximum scale that fits all stickers in one bin...')
-        statusEl.innerText = 'Searching for optimal scale...'
+        statusEl.innerText = 'Searching...'
 
         const result = await findOptimalScaleCore(stickers, binWidth, binHeight, {
           spacing,
@@ -181,17 +189,39 @@
           mutationRate: config.mutationRate
         }, {
           onTestStart: (testScale, iteration, maxIterations) => {
-            statusEl.innerText = `Testing scale ${testScale.toFixed(4)} (${iteration}/${maxIterations})...`
+            statusEl.innerText = `Testing: ${testScale.toFixed(4)}`
           },
           onTestComplete: (testScale, fits, packResult) => {
-            console.log(`Scale ${testScale.toFixed(4)}: ${fits ? 'FITS' : 'DOES NOT FIT'} (${packResult.placed.length} placed, ${packResult.unplaced.length} unplaced)`)
+            // Color-code progress bar
+            progressBody.className = 'progress-body ' + (fits ? 'fits' : 'doesnt-fit')
+
+            let decision = fits ?
+              '✓ FITS → try LARGER (increase lower bound)' :
+              '✗ TOO BIG → try SMALLER (decrease upper bound)'
+
+            console.log(`Scale ${testScale.toFixed(4)}: ${decision} (${packResult.placed.length} placed, ${packResult.unplaced.length} unplaced)`)
 
             // Visualize each test result
             visualize(packResult.bins, packResult.placed, packResult.placements, packResult.unplaced, packResult.placed)
           },
+          onProgress: (minScale, maxScale, bestScale) => {
+            boundsEl.innerHTML = `
+              Binary Search:
+              <span style="color: #e67e22;">min=${minScale.toFixed(4)}</span> |
+              <span style="color: #27ae60;">best=${bestScale.toFixed(4)}</span> |
+              <span style="color: #c0392b;">max=${maxScale.toFixed(4)}</span> |
+              range=${(maxScale - minScale).toFixed(4)}
+            `
+          },
           onComplete: (bestScale, bestResult, iterations) => {
-            console.log(`Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
-            statusEl.innerText = `Optimal scale: ${bestScale.toFixed(4)}`
+            progressBody.className = 'progress-body'
+            console.log(`✓ Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
+            statusEl.innerText = `Found optimal scale!`
+            boundsEl.innerHTML = `
+              <span style="color: #27ae60; font-weight: bold;">
+                ✓ Optimal scale: ${bestScale.toFixed(4)} (converged in ${iterations} iterations)
+              </span>
+            `
           }
         })
 
@@ -331,7 +361,7 @@
           { strokeColor: '#ffaa00', fill: '#ffddaa', strokeWidth: 2 }
         ]
 
-        let sampleRate = 30 // Take every 30th point for better detail (~50 points)
+        let sampleRate = 50 // Take every 50th point for simpler polygons (~30 points)
 
         let config = {
           spacing: spacing || 0,  // space between parts
@@ -343,9 +373,59 @@
 
         // Find optimal scale or use manual scale
         let scale = manualScale
+        let searchResult = null
         if (autoScale) {
-          scale = await findOptimalScale(stickers, width, height, spacing, sampleRate, colors, config)
+          searchResult = await findOptimalScaleCore(stickers, width, height, {
+            spacing,
+            sampleRate,
+            colors,
+            rotationSteps: config.rotationSteps,
+            mutationRate: config.mutationRate
+          }, {
+            onTestStart: (testScale, iteration, maxIterations) => {
+              document.getElementsByClassName('status')[0].innerText = `Testing: ${testScale.toFixed(4)}`
+            },
+            onTestComplete: (testScale, fits, packResult) => {
+              let progressBody = document.getElementsByClassName('progress-body')[0]
+              progressBody.className = 'progress-body ' + (fits ? 'fits' : 'doesnt-fit')
+
+              let decision = fits ?
+                '✓ FITS → try LARGER (increase lower bound)' :
+                '✗ TOO BIG → try SMALLER (decrease upper bound)'
+
+              console.log(`Scale ${testScale.toFixed(4)}: ${decision} (${packResult.placed.length} placed, ${packResult.unplaced.length} unplaced)`)
+              visualize(packResult.bins, packResult.placed, packResult.placements, packResult.unplaced, packResult.placed)
+            },
+            onProgress: (minScale, maxScale, bestScale) => {
+              document.getElementsByClassName('bounds-info')[0].innerHTML = `
+                Binary Search:
+                <span style="color: #e67e22;">min=${minScale.toFixed(4)}</span> |
+                <span style="color: #27ae60;">best=${bestScale.toFixed(4)}</span> |
+                <span style="color: #c0392b;">max=${maxScale.toFixed(4)}</span> |
+                range=${(maxScale - minScale).toFixed(4)}
+              `
+            },
+            onComplete: (bestScale, bestResult, iterations) => {
+              document.getElementsByClassName('progress-body')[0].className = 'progress-body'
+              console.log(`✓ Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
+              document.getElementsByClassName('status')[0].innerText = `Found optimal scale!`
+              document.getElementsByClassName('bounds-info')[0].innerHTML = `
+                <span style="color: #27ae60; font-weight: bold;">
+                  ✓ Optimal scale: ${bestScale.toFixed(4)} (converged in ${iterations} iterations)
+                </span>
+              `
+            }
+          })
+
+          scale = searchResult.scale
           document.getElementById('manual-scale').value = scale.toFixed(3)
+
+          // If search found a solution that fits in one bin, use it directly
+          if (searchResult.result && searchResult.result.unplaced.length === 0) {
+            console.log('Using optimal result from search (all fit in one bin)')
+            visualize(searchResult.result.bins, searchResult.result.placed, searchResult.result.placements, searchResult.result.unplaced, searchResult.result.placed)
+            return // Don't run packing again
+          }
         }
 
         let parts = []
