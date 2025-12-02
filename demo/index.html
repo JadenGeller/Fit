@@ -93,55 +93,69 @@
         return stickers
       }
 
-      // Find optimal scale by actually testing packing
-      async function findOptimalScale(stickers, binWidth, binHeight, spacing, sampleRate, colors, config) {
+      // Core scale optimization algorithm (reusable)
+      async function findOptimalScaleCore(stickers, binWidth, binHeight, config, callbacks = {}) {
+        const {
+          onProgress = () => {},
+          onTestStart = () => {},
+          onTestComplete = () => {},
+          onComplete = () => {}
+        } = callbacks
+
         let minScale = 0.01
         let maxScale = 0.5
         let bestScale = minScale
+        let bestResult = null
         let iterations = 0
         const maxIterations = 20
-
-        let statusEl = document.getElementsByClassName('status')[0]
-        console.log('Searching for maximum scale that fits all stickers in one bin...')
-        statusEl.innerText = 'Searching for optimal scale...'
 
         return new Promise((resolve) => {
           function testScaleIteration() {
             if (iterations >= maxIterations || (maxScale - minScale) < 0.001) {
-              console.log(`Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
-              statusEl.innerText = `Optimal scale: ${bestScale.toFixed(4)}`
-              resolve(bestScale)
+              onComplete(bestScale, bestResult, iterations)
+              resolve({ scale: bestScale, result: bestResult, iterations })
               return
             }
 
             iterations++
             let testScale = (minScale + maxScale) / 2
 
-            statusEl.innerText = `Testing scale ${testScale.toFixed(4)} (${iterations}/${maxIterations})...`
+            onTestStart(testScale, iterations, maxIterations)
 
             // Create parts at this scale
             let parts = stickers.map((stickerData, idx) =>
-              createStickerPart(idx, stickerData, testScale, sampleRate, colors[idx % colors.length])
+              createStickerPart(idx, stickerData, testScale, config.sampleRate, config.colors[idx % config.colors.length])
             )
 
             let bin = new Fit.Bin(0, binWidth, binHeight, { strokeColor: '#aaa', strokeWidth: 2 })
             let testPacker = new Fit.Packer()
 
             // Run packing with minimal generations for speed
-            testPacker.start([bin], parts, { ...config, generations: 3, population: 5 }, {
+            const packConfig = {
+              spacing: config.spacing || 0,
+              rotationSteps: config.rotationSteps || 4,
+              population: 5,
+              generations: 3,
+              mutationRate: config.mutationRate || 0.15
+            }
+
+            testPacker.start([bin], parts, packConfig, {
               onPackingCompleted: (e) => {
                 let fitsInOneBin = e.unplaced.length === 0
 
-                console.log(`Scale ${testScale.toFixed(4)}: ${fitsInOneBin ? 'FITS' : 'DOES NOT FIT'} (${e.placed.length} placed, ${e.unplaced.length} unplaced)`)
+                onTestComplete(testScale, fitsInOneBin, e)
 
                 if (fitsInOneBin) {
                   // Fits! Try larger scale
                   bestScale = testScale
+                  bestResult = e
                   minScale = testScale
                 } else {
                   // Doesn't fit, try smaller scale
                   maxScale = testScale
                 }
+
+                onProgress(minScale, maxScale, bestScale)
 
                 // Continue search
                 setTimeout(testScaleIteration, 10)
@@ -151,6 +165,37 @@
 
           testScaleIteration()
         })
+      }
+
+      // Demo UI wrapper for scale search
+      async function findOptimalScale(stickers, binWidth, binHeight, spacing, sampleRate, colors, config) {
+        let statusEl = document.getElementsByClassName('status')[0]
+        console.log('Searching for maximum scale that fits all stickers in one bin...')
+        statusEl.innerText = 'Searching for optimal scale...'
+
+        const result = await findOptimalScaleCore(stickers, binWidth, binHeight, {
+          spacing,
+          sampleRate,
+          colors,
+          rotationSteps: config.rotationSteps,
+          mutationRate: config.mutationRate
+        }, {
+          onTestStart: (testScale, iteration, maxIterations) => {
+            statusEl.innerText = `Testing scale ${testScale.toFixed(4)} (${iteration}/${maxIterations})...`
+          },
+          onTestComplete: (testScale, fits, packResult) => {
+            console.log(`Scale ${testScale.toFixed(4)}: ${fits ? 'FITS' : 'DOES NOT FIT'} (${packResult.placed.length} placed, ${packResult.unplaced.length} unplaced)`)
+
+            // Visualize each test result
+            visualize(packResult.bins, packResult.placed, packResult.placements, packResult.unplaced, packResult.placed)
+          },
+          onComplete: (bestScale, bestResult, iterations) => {
+            console.log(`Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
+            statusEl.innerText = `Optimal scale: ${bestScale.toFixed(4)}`
+          }
+        })
+
+        return result.scale
       }
 
       function createDebugRect(id, size = 100, options = {}) {
@@ -299,13 +344,6 @@
         // Find optimal scale or use manual scale
         let scale = manualScale
         if (autoScale) {
-          // Show initial visualization with default scale while searching
-          let initialParts = stickers.map((stickerData, idx) =>
-            createStickerPart(idx, stickerData, 0.1, sampleRate, colors[idx % colors.length])
-          )
-          visualize([], [], [], initialParts, initialParts)
-
-          // Now search for optimal scale
           scale = await findOptimalScale(stickers, width, height, spacing, sampleRate, colors, config)
           document.getElementById('manual-scale').value = scale.toFixed(3)
         }
