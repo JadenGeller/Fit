@@ -44,6 +44,44 @@
       let packer = new Fit.Packer()
       let root = document.getElementById('playground')
 
+      // Load sticker polygon from JSON
+      async function loadStickerJSON(filename) {
+        const response = await fetch(`./stickers/${filename}`)
+        return await response.json()
+      }
+
+      // Simplify polygon by sampling every nth point
+      function simplifyPolygon(contour, sampleRate = 10) {
+        return contour.filter((pt, idx) => idx % sampleRate === 0)
+      }
+
+      // Convert sticker JSON contour to Fit.Part
+      function createStickerPart(id, stickerData, scale = 1, sampleRate = 10, options = {}) {
+        // Simplify first, then scale
+        let simplified = simplifyPolygon(stickerData.contour, sampleRate)
+        let points = simplified.map(pt =>
+          new Fit.Vector(pt.x * scale, pt.y * scale)
+        )
+        return new Fit.Part(id, points, options)
+      }
+
+      // Load all sticker shapes
+      async function loadAllStickers() {
+        const stickerFiles = [
+          'JPEG image-digital-cut.json',
+          'tmp1o3nlq22-digital-cut.json',
+          'tmp5wirhmwj-digital-cut.json',
+          'tmprlm_1fcn-digital-cut.json',
+          'tmpzadx3jmf-digital-cut.json'
+        ]
+
+        const stickers = await Promise.all(
+          stickerFiles.map(file => loadStickerJSON(file))
+        )
+
+        return stickers
+      }
+
       function createDebugRect(id, size = 100, options = {}) {
         let points = []
         points.push(new Fit.Vector(0, size))
@@ -155,7 +193,7 @@
       document.getElementById('width').value = w
       document.getElementById('height').value = Math.floor(w * 0.5)
 
-      let start = () => {
+      let start = async () => {
         let width = Number(document.getElementById('width').value)
         let height = Number(document.getElementById('height').value)
         let spacing = Number(document.getElementById('spacing').value)
@@ -163,20 +201,27 @@
         let bin = new Fit.Bin(0, width, height, { strokeColor: '#aaa', strokeWidth: 2 })
         let bins = [ bin ]
 
-        let parts = []
-        for (let i = 0; i < 10; i++) {
-          parts.push(createDebugPart(parts.length, Math.floor(Math.random() * 5 + 3), 30, 120, 100, 100, { strokeColor: '#ff0000', fill: '#ff88aa', strokeWidth: 2 }))
-        }
-        for (let i = 0; i < 15; i++) {
-          parts.push(createDebugPart(parts.length, Math.floor(Math.random() * 4 + 3), 10, 40, 100, 100, { strokeColor: '#0000ff', fill: '#bbccff', strokeWidth: 2 }))
-        }
-        /*
-        for (let i = 0; i < 3; i++) {
-          parts.push(createDebugRect(parts.length, 100, { strokeColor: '#ff0000', fill: '#ff88aa', strokeWidth: 2 }))
-        }
-        */
+        // Load sticker shapes
+        let stickers = await loadAllStickers()
 
-        let config = { 
+        // Define color options for variety
+        const colors = [
+          { strokeColor: '#ff0000', fill: '#ff88aa', strokeWidth: 2 },
+          { strokeColor: '#0000ff', fill: '#bbccff', strokeWidth: 2 },
+          { strokeColor: '#00ff00', fill: '#88ffaa', strokeWidth: 2 },
+          { strokeColor: '#ff00ff', fill: '#ffaaff', strokeWidth: 2 },
+          { strokeColor: '#ffaa00', fill: '#ffddaa', strokeWidth: 2 }
+        ]
+
+        let parts = []
+        // Use all 5 stickers with aggressive simplification
+        stickers.forEach((stickerData, idx) => {
+          let scale = 0.1 + Math.random() * 0.05 // 0.1 to 0.15
+          let sampleRate = 30 // Take every 30th point for better detail (~50 points)
+          parts.push(createStickerPart(parts.length, stickerData, scale, sampleRate, colors[idx % colors.length]))
+        })
+
+        let config = {
           spacing: spacing || 0,  // space between parts
           rotationSteps: 4,       // # of angles for available rotation (ex. 4 means [0, 90, 180, 270] angles from 360 / 4 )
           population: 10,         // # of population in GA
