@@ -13,6 +13,7 @@
       </div>
       <div id='indicator'>
         <span class='generation'></span>
+        <span class='status'></span>
         <span class='progress'>
           <span class='progress-body'>
           </span>
@@ -31,6 +32,16 @@
           <li>
             <label for='spacing'>Spacing:</label>
             <input id='spacing' type='number' value='5' min='0' max='20' />
+          </li>
+          <li>
+            <label for='auto-scale'>
+              <input id='auto-scale' type='checkbox' checked />
+              Auto-find optimal scale
+            </label>
+          </li>
+          <li>
+            <label for='manual-scale'>Manual Scale:</label>
+            <input id='manual-scale' type='number' value='0.1' min='0.01' max='0.5' step='0.01' />
           </li>
           <li>
             <button id='reset-button'>Reset</button>
@@ -80,6 +91,66 @@
         )
 
         return stickers
+      }
+
+      // Find optimal scale by actually testing packing
+      async function findOptimalScale(stickers, binWidth, binHeight, spacing, sampleRate, colors, config) {
+        let minScale = 0.01
+        let maxScale = 0.5
+        let bestScale = minScale
+        let iterations = 0
+        const maxIterations = 20
+
+        let statusEl = document.getElementsByClassName('status')[0]
+        console.log('Searching for maximum scale that fits all stickers in one bin...')
+        statusEl.innerText = 'Searching for optimal scale...'
+
+        return new Promise((resolve) => {
+          function testScaleIteration() {
+            if (iterations >= maxIterations || (maxScale - minScale) < 0.001) {
+              console.log(`Optimal scale found: ${bestScale.toFixed(4)} after ${iterations} iterations`)
+              statusEl.innerText = `Optimal scale: ${bestScale.toFixed(4)}`
+              resolve(bestScale)
+              return
+            }
+
+            iterations++
+            let testScale = (minScale + maxScale) / 2
+
+            statusEl.innerText = `Testing scale ${testScale.toFixed(4)} (${iterations}/${maxIterations})...`
+
+            // Create parts at this scale
+            let parts = stickers.map((stickerData, idx) =>
+              createStickerPart(idx, stickerData, testScale, sampleRate, colors[idx % colors.length])
+            )
+
+            let bin = new Fit.Bin(0, binWidth, binHeight, { strokeColor: '#aaa', strokeWidth: 2 })
+            let testPacker = new Fit.Packer()
+
+            // Run packing with minimal generations for speed
+            testPacker.start([bin], parts, { ...config, generations: 3, population: 5 }, {
+              onPackingCompleted: (e) => {
+                let fitsInOneBin = e.unplaced.length === 0
+
+                console.log(`Scale ${testScale.toFixed(4)}: ${fitsInOneBin ? 'FITS' : 'DOES NOT FIT'} (${e.placed.length} placed, ${e.unplaced.length} unplaced)`)
+
+                if (fitsInOneBin) {
+                  // Fits! Try larger scale
+                  bestScale = testScale
+                  minScale = testScale
+                } else {
+                  // Doesn't fit, try smaller scale
+                  maxScale = testScale
+                }
+
+                // Continue search
+                setTimeout(testScaleIteration, 10)
+              }
+            })
+          }
+
+          testScaleIteration()
+        })
       }
 
       function createDebugRect(id, size = 100, options = {}) {
@@ -197,6 +268,8 @@
         let width = Number(document.getElementById('width').value)
         let height = Number(document.getElementById('height').value)
         let spacing = Number(document.getElementById('spacing').value)
+        let autoScale = document.getElementById('auto-scale').checked
+        let manualScale = Number(document.getElementById('manual-scale').value)
 
         let bin = new Fit.Bin(0, width, height, { strokeColor: '#aaa', strokeWidth: 2 })
         let bins = [ bin ]
@@ -213,13 +286,7 @@
           { strokeColor: '#ffaa00', fill: '#ffddaa', strokeWidth: 2 }
         ]
 
-        let parts = []
-        // Use all 5 stickers with aggressive simplification
-        stickers.forEach((stickerData, idx) => {
-          let scale = 0.1 + Math.random() * 0.05 // 0.1 to 0.15
-          let sampleRate = 30 // Take every 30th point for better detail (~50 points)
-          parts.push(createStickerPart(parts.length, stickerData, scale, sampleRate, colors[idx % colors.length]))
-        })
+        let sampleRate = 30 // Take every 30th point for better detail (~50 points)
 
         let config = {
           spacing: spacing || 0,  // space between parts
@@ -228,6 +295,26 @@
           generations: 10,        // # of generations in GA
           mutationRate: 0.15      // mutation rate in GA
         }
+
+        // Find optimal scale or use manual scale
+        let scale = manualScale
+        if (autoScale) {
+          // Show initial visualization with default scale while searching
+          let initialParts = stickers.map((stickerData, idx) =>
+            createStickerPart(idx, stickerData, 0.1, sampleRate, colors[idx % colors.length])
+          )
+          visualize([], [], [], initialParts, initialParts)
+
+          // Now search for optimal scale
+          scale = await findOptimalScale(stickers, width, height, spacing, sampleRate, colors, config)
+          document.getElementById('manual-scale').value = scale.toFixed(3)
+        }
+
+        let parts = []
+        // Use all 5 stickers with the determined scale
+        stickers.forEach((stickerData, idx) => {
+          parts.push(createStickerPart(parts.length, stickerData, scale, sampleRate, colors[idx % colors.length]))
+        })
 
         // visualize([], [], [], parts, parts)
 
